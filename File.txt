@@ -1,0 +1,734 @@
+import { test, expect, chromium, request } from "@playwright/test"
+import { loggerFormat } from "../utils/logger_format"
+import dotenv from "dotenv"
+import fs from "fs"
+import path from "path"
+
+const envPath = path.resolve(__dirname, "../.env")
+
+if (fs.existsSync(envPath)) {
+  dotenv.config({ path: envPath })
+  loggerFormat("Loaded .env file")
+} else {
+  loggerFormat(".env file not found, using default values.")
+}
+
+test.describe("MaiWorkstation User Management", () => {
+  let browser
+  let context
+  let page
+
+  const username = process.env.TEST_ACC_USERNAME1 // maidebugTest
+  const password = process.env.TEST_ACC_PASSWORD // MaiTest123456
+  const new_user = process.env.NEW_USER // hoemang.mark
+  const new_user_id = process.env.NEW_USER_ID // "MS2408002"
+  const invalid_user = process.env.INVALID_USER // itadmin
+  const member = process.env.TEST_ACC_USERNAME2 // maiadminTest
+  const member_id = process.env.MEMBER_ID // MaiTest125
+  const before_edit_title = process.env.BEFORE_EDIT_TITLE // CTO
+  const before_edit_department = process.env.BEFORE_EDIT_DEPARTMENT // Research & Development
+  const after_edit_title = process.env.AFTER_EDIT_TITLE // CEO
+  const after_edit_department = process.env.AFTER_EDIT_DEPARTMENT // Software Department
+
+  loggerFormat("username", username)
+  loggerFormat("password", password)
+
+  test.beforeAll(async () => {
+    browser = await chromium.launch({ headless: false })
+    context = await browser.newContext({ ignoreHTTPSErrors: true })
+    page = await context.newPage()
+
+    await page.goto("/login")
+    await page.waitForURL(/login/)
+
+    await page.getByRole("textbox", { name: "Username" }).fill(username)
+    await page.getByRole("textbox", { name: "Password" }).fill(password)
+    await page.getByRole("button", { name: "Login" }).click()
+
+    await page.waitForURL(/dashboard/)
+    loggerFormat("Successfully logged in!")
+  })
+
+  test.beforeEach(async () => {
+    await page.getByRole("link", { name: "User Management" }).click()
+    await page.waitForTimeout(1000)
+  })
+
+  test.afterAll(async () => {
+    await browser.close()
+    loggerFormat("Browser closed after all tests")
+  })
+
+  test("UM_001 - Ensure it able to add user with ldap", async () => {
+    loggerFormat("Starting adding user test...")
+    await page.getByTestId("add-user-button").click()
+
+    const modal = page.getByRole("dialog")
+    await expect(modal).toBeVisible()
+
+    await modal.getByTestId("add-user-search-input").click()
+    await modal.getByTestId("add-user-search-input").type(new_user)
+    await page.waitForTimeout(1000)
+
+    const addUserCheckbox = modal.getByTestId(`add-user-checkbox-${new_user}`)
+    await addUserCheckbox.waitFor({ state: "visible", timeout: 5000 })
+    await addUserCheckbox.check()
+    await page.waitForTimeout(1000)
+
+    await modal.getByRole("button", { name: "Add Selected" }).click()
+    await expect(page.getByRole("listitem").filter({ hasText: new_user })).toBeVisible()
+    await page.waitForTimeout(1000)
+
+    await page.getByRole("button", { name: "Confirm" }).click()
+    await page.getByTestId("user-search-input").fill(new_user)
+    await page.waitForTimeout(1000)
+
+    const row = page.locator("tr", { hasText: new_user })
+    await expect(row).toBeVisible()
+    await expect(row.locator("td").nth(2)).toHaveText(new_user)
+
+    const roleCell = row.locator("td").nth(7)
+    await expect(roleCell).not.toHaveText("", { timeout: 5000 })
+    const roleText = (await roleCell.innerText()).trim()
+    loggerFormat(`Verified ${new_user} has default role: ${roleText}`)
+  })
+
+  test("UM_002 - Ensure it able to edit user data", async () => {
+    loggerFormat(`Searching for ${new_user} to edit...`)
+    await page.getByTestId("user-search-input").fill(new_user)
+    await page.waitForTimeout(1000)
+    await page.getByTestId(`edit-user-button-${new_user_id}`).click()
+    await page.getByRole("textbox", { name: "Title" }).click()
+    await page.getByRole("textbox", { name: "Title" }).fill(after_edit_title)
+    await page.getByRole("textbox", { name: "Department" }).click()
+    await page.getByRole("textbox", { name: "Department" }).fill(after_edit_department)
+    await page.getByRole("checkbox", { name: "Is Leader" }).check()
+    await page.waitForTimeout(1000)
+    await page.getByTestId("save-edit-user-button").click()
+    // Compare the variable value from original user and edited user
+    await expect(page.getByText(`Title: ${before_edit_title}`)).toBeVisible()
+    await expect(page.getByText(`Department: ${before_edit_department}`)).toBeVisible()
+    await expect(page.getByText("Is_leader: No")).toBeVisible()
+
+    await expect(page.getByText(`Title: ${after_edit_title}`)).toBeVisible()
+    await expect(page.getByText(`Department: ${after_edit_department}`)).toBeVisible()
+    await expect(page.getByText("Is_leader: Yes")).toBeVisible()
+    await page.waitForTimeout(1000)
+
+    await page.getByRole("button", { name: "Confirm" }).click()
+
+    const afterEditRow = page.locator("tr", { hasText: new_user })
+
+    loggerFormat("Verifying edit user data...")
+    try {
+      await expect(afterEditRow.locator("td").nth(3)).toHaveText(after_edit_title)
+      await expect(afterEditRow.locator("td").nth(4)).toHaveText(after_edit_department)
+      await expect(afterEditRow.locator("td").nth(6)).toHaveText("Yes")
+      loggerFormat("User edit test completed.")
+    } catch (error) {
+      throw error
+    }
+  })
+
+  test("UM_003 - Ensure it able to edit user role (add Tester)", async () => {
+    loggerFormat(`Searching for ${new_user} to edit role...`)
+    await page.getByTestId("user-search-input").fill(new_user)
+
+    await page.getByTestId(`edit-user-button-${new_user_id}`).click()
+    const dialog = page.getByRole("dialog")
+    await expect(dialog).toBeVisible()
+    await page.waitForTimeout(1000)
+    await page.locator('[data-testid="role-select"] .ant-select-selector').click()
+    await page.getByTestId("role-select").locator(".ant-select-selection-search-input").fill("Tester")
+    await page.waitForTimeout(3000)
+    await page.keyboard.press("Enter")
+    await page.waitForTimeout(3000)
+    await page.getByTestId("save-edit-user-button").click()
+    const confirmDialog = page.getByRole("dialog").last()
+    await expect(confirmDialog.getByTestId("original-roles-list")).not.toContainText(/tester/i, { timeout: 10000 })
+    await expect(confirmDialog.getByTestId("edited-roles-list")).toContainText(/tester/i, { timeout: 10000 })
+
+    loggerFormat("Verified Tester role is visible in confirmation view.")
+    await page.getByRole("button", { name: "Confirm" }).click()
+    await page.getByTestId("user-search-input").fill(new_user)
+    const afterEditRow = page.locator("tr", { hasText: new_user_id }).first()
+    await expect(afterEditRow).toBeVisible()
+
+    const roleCell = afterEditRow.locator("td").nth(7)
+    await expect(roleCell).toContainText(/tester/i, { timeout: 5000 })
+    loggerFormat("Verified Tester role added successfully in table.")
+  })
+
+  test("UM_004 - Ensure it able to edit user role (remove Tester)", async () => {
+    loggerFormat(`Searching for ${new_user} to remove Tester role...`)
+    await page.getByTestId("user-search-input").fill(new_user)
+
+    await page.getByTestId(`edit-user-button-${new_user_id}`).click()
+    const dialog = page.getByRole("dialog")
+    await expect(dialog).toBeVisible()
+    await page.waitForTimeout(1000)
+    await page.locator('[data-testid="role-select"] .ant-select-selector').click()
+    await page.getByTestId("role-select").locator(".ant-select-selection-search-input").fill("Tester")
+    await page.waitForTimeout(3000)
+    await page.keyboard.press("Enter")
+    await page.waitForTimeout(3000)
+    await page.getByTestId("save-edit-user-button").click()
+
+    const confirmDialog = page.getByRole("dialog").last()
+
+    await expect(confirmDialog.getByTestId("original-roles-list")).toContainText(/tester/i, { timeout: 10000 })
+    await expect(confirmDialog.getByTestId("edited-roles-list")).not.toContainText(/tester/i, { timeout: 10000 })
+
+    loggerFormat("Verified Tester role is removed in confirmation view.")
+    await page.getByRole("button", { name: "Confirm" }).click()
+
+    await page.getByTestId("user-search-input").fill(new_user)
+
+    const afterEditRow = page.locator("tr", { hasText: new_user_id }).first()
+    await expect(afterEditRow).toBeVisible()
+
+    const roleCell = afterEditRow.locator("td").nth(7)
+    await expect(roleCell).not.toContainText(/tester/i, { timeout: 5000 })
+    loggerFormat("Verified Tester role removed successfully in table.")
+  })
+
+  test("UM_005 - Ensure it can assign leader to a user", async () => {
+    loggerFormat(`Searching for ${member} to assign a leader by ${new_user}...`)
+    await page.getByTestId("user-search-input").fill(member)
+    await page.locator(`#select_user_${member_id}`).check()
+    await page.waitForTimeout(1000)
+
+    await page.getByRole("button", { name: "Assign Leader", exact: true }).click()
+    await page.waitForTimeout(1000)
+
+    await expect(page.getByRole("menu").getByText(new_user)).toBeVisible()
+    await page.getByRole("menu").getByText(new_user).click()
+    await page.waitForTimeout(1000)
+
+    await expect(page.locator("div").filter({ hasText: /^Confirm Assign Leader$/ })).toBeVisible()
+    await page.getByRole("button", { name: "Confirm" }).click()
+
+    // Expect the selected row of 'memberOf' column to have the correct leader assigned
+    const row = page.locator("tr", { hasText: member_id })
+    const memberOfCell = row.locator("td").nth(5)
+
+    try {
+      await expect(memberOfCell).toHaveText(new_user)
+      loggerFormat(`${member} assigned ${new_user} as leader successfully.`)
+    } catch (error) {
+      throw error
+    }
+  })
+
+  test("UM_006 - Ensure it can unassign leader from a user", async () => {
+    loggerFormat(`Searching for ${member} to unassign leader...`)
+    await page.getByTestId("user-search-input").fill(member)
+    await page.locator(`#select_user_${member_id}`).check()
+    await page.getByRole("button", { name: "Unassign Leader" }).click()
+    await page.getByRole("button", { name: "Confirm" }).click()
+
+    // Expect the selected row of 'memberOf' to be empty
+    const row = page.locator("tr", { hasText: member_id })
+    const memberOfCell = row.locator("td").nth(5)
+
+    try {
+      await expect(memberOfCell).toHaveText("")
+      loggerFormat("Unassign leader successfully.")
+    } catch (error) {
+      throw error
+    }
+  })
+
+  test("UM_007 - Ensure it can delete the user", async () => {
+    loggerFormat(`Searching for ${new_user} to delete...`)
+    await page.getByTestId("user-search-input").fill(new_user)
+
+    await page.getByTestId(`delete-user-button-${new_user_id}`).click()
+
+    await page.waitForSelector('[data-testid="confirm-message-modal"]', { state: "visible", timeout: 3000 })
+
+    loggerFormat("Confirm delete modal is visible.")
+
+    await page.getByRole("button", { name: "Confirm" }).click()
+
+    await page.getByTestId("user-search-input").fill("")
+
+    try {
+      await expect(page.locator(`tr:has-text("${new_user_id}")`)).toHaveCount(0)
+      loggerFormat("User delete test completed")
+    } catch (error) {
+      throw error
+    }
+  })
+
+  test("UM_008 - Ensure edit user cannot leave empty title and department", async () => {
+    loggerFormat("Checking user cannot leave empty title and department while edit.")
+    await page.getByTestId("user-search-input").fill(member)
+
+    await page.getByTestId(`edit-user-button-${member_id}`).click()
+    await page.waitForTimeout(1000)
+
+    // Leave the title and department to be empty
+    await page.getByRole("textbox", { name: "Title" }).click()
+    await page.getByRole("textbox", { name: "Title" }).fill("")
+    await expect(page.getByText("Title is required")).toBeVisible()
+
+    await page.getByRole("textbox", { name: "Department" }).click()
+    await page.getByRole("textbox", { name: "Department" }).fill("")
+    await expect(page.getByText("Department is required")).toBeVisible()
+
+    await page.waitForTimeout(1000)
+
+    try {
+      await expect(page.getByRole("button", { name: "Save" })).toBeDisabled()
+      loggerFormat("Checking user cannot leave empty title and department while edit is confirmed.")
+    } catch (error) {
+      throw error
+    }
+
+    const editDialog = page.getByRole("dialog").filter({ hasText: "Edit User Data" })
+    if (await editDialog.isVisible().catch(() => false)) {
+      // Prefer the explicit Cancel test id your component provides
+      const cancel = page.getByTestId("cancel-edit-user-button")
+      if (await cancel.isVisible().catch(() => false)) {
+        await cancel.click().catch(() => {})
+      } else {
+        // Fallback: any close-looking button
+        await editDialog
+          .locator('button:has-text("Cancel"), [aria-label="Close"], .btn-close')
+          .first()
+          .click()
+          .catch(() => {})
+      }
+      await expect(editDialog).toHaveCount(0)
+    }
+  })
+
+  test("UM_009 - Ensure the missing field user cannot be added through ldap", async () => {
+    loggerFormat("Checking user cannot add user with missing fields.")
+    await page.getByTestId("add-user-button").click()
+    await page.waitForTimeout(1000)
+
+    await page.locator(`#ldap_select_${invalid_user}`).check()
+    await page.waitForTimeout(1000)
+
+    await page.getByRole("button", { name: "Add Selected" }).click()
+    await page.waitForTimeout(1000)
+
+    try {
+      await expect(page.getByText(/have missing information/i)).toBeVisible()
+      await expect(page.getByRole("button", { name: "Confirm" })).toBeDisabled()
+      loggerFormat("Checking user cannot add user with missing fields is confirmed.")
+    } catch (error) {
+      throw error
+    }
+
+    await page.getByRole("button", { name: "Cancel" }).nth(1).click()
+    await page.waitForTimeout(1000)
+    await page.getByRole("button", { name: "Cancel" }).click()
+  })
+
+  test("UM_010 - User Management: Department sort cycles", async () => {
+    // Go to a different page and back to get a clean table render
+    await page.getByRole("link", { name: "VM Management" }).click()
+    await page.waitForSelector("tbody tr", { timeout: 8000 })
+    await page.getByRole("link", { name: "User Management" }).click()
+    await page.waitForSelector("tbody tr", { timeout: 8000 })
+
+    // Clear search box if anything was left from previous tests
+    const search = page.getByTestId("user-search-input")
+    await search.fill("")
+    await page.keyboard.press("Enter").catch(() => {})
+    await page.waitForTimeout(150)
+
+    // ---- API: fetch all users, extract and sort departments
+    const api = await request.newContext({ ignoreHTTPSErrors: true })
+    const resp = await api.get("/api/user/getAllUser/")
+    expect(resp.ok()).toBeTruthy()
+    const data = await resp.json()
+    await api.dispose()
+
+    const usersArr = Array.isArray(data) ? data : Array.isArray(data?.users) ? data.users : []
+    const rawDepartments = usersArr.map((u) => u?.department).filter(Boolean)
+
+    const normalizeDeptForUI = (s) => {
+      if (!s) return s
+      const t = String(s).trim()
+      return t.includes("-") ? t.split("-").slice(1).join("-").trim() : t
+    }
+
+    const departmentsNormalized = Array.from(new Set(rawDepartments.map(normalizeDeptForUI).filter(Boolean)))
+
+    const collate = (a, b) => a.localeCompare(b, undefined, { sensitivity: "accent" })
+
+    const sortedAsc = [...departmentsNormalized].sort(collate)
+    expect(sortedAsc.length).toBeGreaterThan(0)
+
+    const headers = page.locator("thead tr th")
+
+    async function getColumnIndex(headerText) {
+      const count = await headers.count()
+      for (let i = 0; i < count; i++) {
+        const t = (await headers.nth(i).innerText()).trim()
+        if (new RegExp(`^${headerText}$`, "i").test(t)) return i
+      }
+      throw new Error(`${headerText} column not found`)
+    }
+
+    async function getFirstCellText(colIdx) {
+      const firstRow = page.locator("tbody tr").first()
+      await expect(firstRow).toBeVisible()
+      return (await firstRow.locator("td").nth(colIdx).innerText()).trim()
+    }
+
+    async function getFirstRowDept() {
+      const depIdx = await getColumnIndex("Department")
+      return getFirstCellText(depIdx)
+    }
+
+    async function getFirstRowUsername() {
+      const uIdx = await getColumnIndex("Username")
+      return getFirstCellText(uIdx)
+    }
+
+    // Store the original first Username to validate the "reset" state
+    const originalFirstUsername = await getFirstRowUsername()
+    expect(originalFirstUsername.length).toBeGreaterThan(0)
+
+    // Locate the Department header + sort icon
+    const deptHeader = page.locator('th:has(.header-cell .header-text:has-text("Department"))').first()
+    await expect(deptHeader).toBeVisible()
+    const sortIcon = deptHeader.locator(".header-icons svg").first()
+
+    async function clickSort() {
+      if (await sortIcon.count()) {
+        await sortIcon.click({ force: true })
+      } else {
+        await deptHeader.locator(".header-cell").click({ force: true })
+      }
+      await page.waitForTimeout(200)
+    }
+
+    // 1) ASC: first row's Department should equal the first item of the sorted list
+    await clickSort()
+    const firstDeptAsc = normalizeDeptForUI(await getFirstRowDept())
+    expect(firstDeptAsc).toBe(sortedAsc[0])
+
+    // 2) DESC: first row's Department should equal the last item of the sorted list
+    await clickSort()
+    const firstDeptDesc = normalizeDeptForUI(await getFirstRowDept())
+    expect(firstDeptDesc).toBe(sortedAsc[sortedAsc.length - 1])
+
+    // 3) RESET: first row's Username should match the one we stored at the beginning
+    await clickSort()
+    const firstUsernameAfterReset = await getFirstRowUsername()
+    expect(firstUsernameAfterReset).toBe(originalFirstUsername)
+  })
+
+  test("UM_011 - Filter Department via header filter", async () => {
+    // Navigate away & back to force a clean render
+    await page.getByRole("link", { name: "VM Management" }).click()
+    await page.waitForSelector("tbody tr", { timeout: 8000 })
+    await page.getByRole("link", { name: "User Management" }).click()
+    await page.waitForSelector("tbody tr", { timeout: 8000 })
+
+    // Make sure table header is visible at the top of the viewport
+    await page.evaluate(() => window.scrollTo(0, 0))
+
+    const deptHeader = page.locator('th:has(.header-cell .header-text:has-text("Department"))').first()
+    await expect(deptHeader).toBeVisible()
+    await deptHeader.scrollIntoViewIfNeeded()
+
+    const filterIcon = deptHeader.locator(".header-icons .filter-icon").first()
+    await expect(filterIcon).toBeVisible()
+    await filterIcon.click({ force: true })
+
+    // AntD dropdown / popover that contains our filter UI
+    const popup = page
+      .locator(".custom-filter-dropdown, .modal-filter-dropdown, .ant-dropdown, .ant-popover")
+      .filter({ has: page.locator(".filter-dropdown") })
+      .last()
+    await popup.waitFor({ state: "visible" })
+
+    // Scroll inside the filter pane, not the page
+    const pane = popup.locator(".filter-options").first()
+    await expect(pane).toBeVisible()
+    await pane.evaluate((el) => {
+      el.scrollTop = 0
+    })
+
+    // Prefer selecting the INPUT directly
+    const firstInput = pane.locator('input[type="checkbox"]').first()
+    await expect(firstInput).toBeVisible()
+
+    // Capture the visible label text for assertion
+    const cbId = await firstInput.getAttribute("id")
+    const firstLabel = pane.locator(`label[for="${cbId}"]`).first()
+    const labelText = (await firstLabel.innerText()).trim()
+
+    // Check the checkbox (no click on label)
+    await page.waitForTimeout(1000)
+    await firstInput.check({ force: true })
+    await page.waitForTimeout(2000)
+    await expect(firstInput).toBeChecked()
+
+    // Close the popup so the filter applies
+    await page.keyboard.press("Escape").catch(() => {})
+    await page.waitForTimeout(200)
+
+    // Find the "Department" column index
+    const headers = page.locator("thead tr th")
+    const hCount = await headers.count()
+    let depIdx = -1
+    for (let i = 0; i < hCount; i++) {
+      const t = (await headers.nth(i).innerText()).trim()
+      if (/^department$/i.test(t)) {
+        depIdx = i
+        break
+      }
+    }
+    expect(depIdx).toBeGreaterThanOrEqual(0)
+
+    // Assert all visible rows match the chosen department
+    const rows = page.locator("tbody tr")
+    const rCount = await rows.count()
+    expect(rCount).toBeGreaterThan(0)
+
+    for (let i = 0; i < rCount; i++) {
+      const depCell = rows.nth(i).locator("td").nth(depIdx)
+      await expect(depCell).toContainText(labelText)
+    }
+
+    await filterIcon.click()
+    const popupReset = page
+      .locator(".custom-filter-dropdown, .modal-filter-dropdown, .ant-dropdown, .ant-popover")
+      .filter({ has: page.locator(".filter-dropdown") })
+      .last()
+
+    await popupReset.waitFor({ state: "visible" })
+
+    const paneReset = popupReset.locator(".filter-options").first()
+    const firstInputReset = paneReset.locator('input[type="checkbox"]').first()
+
+    await firstInputReset.uncheck({ force: true })
+
+    await page.keyboard.press("Escape")
+  })
+
+  test("UM_012 - Ensure it able to add user with manual and login", async () => {
+    loggerFormat("Starting manual user creation test...")
+
+    const manualUser = `manualuser${Date.now()}`
+    const title = "QA Engineer"
+    const department = "Testing Department"
+    const password = "Test1234"
+
+    // Open Add User modal
+    await page.getByTestId("add-user-button").click()
+
+    const modal = page.getByRole("dialog")
+    await expect(modal).toBeVisible()
+
+    // Switch to Manual tab
+    loggerFormat("Switching to Manual tab")
+    await modal.getByTestId("manual-tab").click()
+
+    // Locate inputs
+    const usernameInput = modal.getByTestId("manual-username-input")
+    const titleInput = modal.getByTestId("manual-title-input")
+    const departmentInput = modal.getByTestId("manual-department-input")
+    const passwordInput = modal.getByTestId("manual-password-input")
+    const confirmPasswordInput = modal.getByTestId("manual-confirm-password-input")
+    const createButton = modal.getByTestId("create-user-button")
+
+    // ---------- Step 1: Required validation ----------
+    loggerFormat("Checking required field validation")
+
+    await createButton.click()
+
+    await expect(modal.getByText("Username is required.")).toBeVisible()
+    await expect(modal.getByText("Title is required.")).toBeVisible()
+    await expect(modal.getByText("Department is required.")).toBeVisible()
+    await expect(modal.getByTestId("manual-password-error")).toBeVisible()
+    await expect(modal.getByTestId("manual-confirm-password-error")).toBeVisible()
+
+    // ---------- Step 2: Password mismatch ----------
+    loggerFormat("Checking password mismatch validation")
+
+    await usernameInput.fill(manualUser)
+    await titleInput.fill(title)
+    await departmentInput.fill(department)
+    await passwordInput.fill(password)
+    await confirmPasswordInput.fill("Test12345")
+    await createButton.click()
+    await expect(page.getByText(/password do not match/i)).toBeVisible()
+
+    // ---------- Step 3: Password visibility toggle ----------
+    loggerFormat("Checking password visibility toggle")
+
+    await modal.getByTestId("toggle-password-visibility").click()
+    await expect(passwordInput).toHaveAttribute("type", "text")
+    await modal.getByTestId("toggle-password-visibility").click()
+    await expect(passwordInput).toHaveAttribute("type", "password")
+
+    // ---------- Step 4: Create user successfully ----------
+    loggerFormat("Creating manual user")
+
+    await confirmPasswordInput.fill(password)
+    await createButton.click()
+    await expect(modal).toBeHidden()
+
+    // ---------- Step 5: Verify user exists ----------
+    loggerFormat("Searching for newly created user")
+
+    const search = page.getByTestId("user-search-input")
+    await search.fill(manualUser)
+    await search.press("Enter")
+
+    const row = page.locator("tr", { hasText: manualUser })
+
+    await expect(row).toBeVisible()
+
+    await expect(row.locator("td").nth(2)).toHaveText(manualUser)
+    await expect(row.locator("td").nth(3)).toHaveText(title)
+    await expect(row.locator("td").nth(4)).toHaveText(department)
+
+    await search.fill("")
+    await search.press("Enter").catch(() => {})
+
+    loggerFormat("Manual user creation test completed successfully.")
+
+    // ---------- Step 6: Verify created user can login ----------
+    loggerFormat("Verifying new user can login")
+
+    const loginContext = await browser.newContext({ ignoreHTTPSErrors: true })
+    const loginPage = await loginContext.newPage()
+
+    await loginPage.goto("/login")
+    await loginPage.waitForURL(/login/)
+    await loginPage.getByRole("textbox", { name: "Username" }).fill(manualUser)
+    await loginPage.getByRole("textbox", { name: "Password" }).fill(password)
+    await loginPage.getByRole("button", { name: "Login" }).click()
+    await loginPage.waitForURL(/dashboard/)
+
+    loggerFormat(`Manual user ${manualUser} successfully logged in.`)
+
+    await loginContext.close()
+  })
+
+  test("UM_013 - Verify duplicate username conflict between LDAP and Manual", async () => {
+    loggerFormat("Starting UM_013 duplicate username test")
+
+    const ldapUsername = new_user
+
+    // Pre-Step — Ensure user does not already exist
+    loggerFormat("Checking if test user already exists in table")
+
+    const search = page.getByTestId("user-search-input")
+    await search.fill(ldapUsername)
+    await search.press("Enter").catch(() => {})
+    const existingRow = page.locator("tbody tr", { hasText: ldapUsername }).first()
+    const rowCount = await existingRow.count()
+
+    if (rowCount > 0) {
+      loggerFormat("Existing user found. Extracting user_id...")
+      const userId = (await existingRow.locator("td").nth(1).innerText()).trim()
+      loggerFormat(`Deleting user with ID: ${userId}`)
+      await page.getByTestId(`delete-user-button-${userId}`).click()
+      await page.waitForSelector('[data-testid="confirm-message-modal"]', { state: "visible" })
+      await page.getByRole("button", { name: "Confirm" }).click()
+      await expect(page.locator(`tr:has-text("${ldapUsername}")`)).toHaveCount(0)
+      loggerFormat("Pre-existing user deleted.")
+    } else {
+      loggerFormat("No existing user found. Continuing test.")
+    }
+
+    await search.fill("")
+    await search.press("Enter").catch(() => {})
+
+    // Step 1 — Add LDAP user
+    await page.getByTestId("add-user-button").click()
+    const modal = page.getByRole("dialog")
+    await expect(modal).toBeVisible()
+    await modal.getByTestId("add-user-search-input").fill(ldapUsername)
+    await page.waitForTimeout(1000)
+    const ldapCheckbox = modal.getByTestId(`add-user-checkbox-${ldapUsername}`)
+    await ldapCheckbox.check()
+    await modal.getByRole("button", { name: "Add Selected" }).click()
+    await expect(page.getByRole("listitem").filter({ hasText: ldapUsername })).toBeVisible()
+    await page.getByRole("button", { name: "Confirm" }).click()
+    loggerFormat(`LDAP user ${ldapUsername} added successfully.`)
+
+    // Step 2 — Try manual create with same username
+    await page.getByTestId("add-user-button").click()
+    const modal2 = page.getByRole("dialog")
+    await expect(modal2).toBeVisible()
+    await modal2.getByTestId("manual-tab").click()
+    await modal2.getByTestId("manual-username-input").fill(ldapUsername)
+    await modal2.getByTestId("manual-title-input").fill("QA Tester")
+    await modal2.getByTestId("manual-department-input").fill("Testing Department")
+    await modal2.getByTestId("manual-password-input").fill("Test1234")
+    await modal2.getByTestId("manual-confirm-password-input").fill("Test1234")
+    await modal2.getByTestId("create-user-button").click()
+
+    // Expected alert
+    await expect(page.getByText(/Username already exists/i)).toBeVisible()
+    loggerFormat("Duplicate username prevented correctly.")
+    await page.getByRole("button", { name: "Cancel" }).click()
+
+    // Step 3 — Delete the LDAP user from table
+    loggerFormat("Deleting LDAP user from table")
+    await page.getByTestId("user-search-input").fill(ldapUsername)
+    await page.getByTestId(`delete-user-button-${new_user_id}`).click()
+    await page.getByTestId("confirm-message-modal").waitFor({ state: "visible" })
+    await page.getByRole("button", { name: "Confirm" }).click()
+    await expect(page.locator(`tr:has-text("${ldapUsername}")`)).toHaveCount(0)
+    loggerFormat("LDAP user deleted successfully.")
+
+    // Step 4 — Create manual user with same username
+    await page.getByTestId("add-user-button").click()
+    const modal3 = page.getByRole("dialog")
+    await expect(modal3).toBeVisible()
+    await modal3.getByTestId("manual-tab").click()
+    await modal3.getByTestId("manual-username-input").fill(ldapUsername)
+    await modal3.getByTestId("manual-title-input").fill("QA Tester")
+    await modal3.getByTestId("manual-department-input").fill("Testing Department")
+    await modal3.getByTestId("manual-password-input").fill("Test1234")
+    await modal3.getByTestId("manual-confirm-password-input").fill("Test1234")
+    await modal3.getByTestId("create-user-button").click()
+    await expect(modal3).toBeHidden()
+    loggerFormat(`Manual user ${ldapUsername} created successfully.`)
+
+    // Step 5 — Verify LDAP list hides this username
+    await page.getByTestId("add-user-button").click()
+    const modal4 = page.getByRole("dialog")
+    await expect(modal4).toBeVisible()
+    await modal4.getByTestId("add-user-search-input").fill(ldapUsername)
+    const ldapRow = modal4.locator(`tr:has-text("${ldapUsername}")`)
+    await expect(ldapRow).toHaveCount(0)
+    loggerFormat("Manual created username correctly hidden from LDAP list.")
+    await page.getByRole("button", { name: "Cancel" }).click()
+
+    // Step 6 - Remove back the user
+    loggerFormat("Checking if test user already exists in table")
+
+    await search.fill(ldapUsername)
+    await search.press("Enter").catch(() => {})
+
+    if (rowCount > 0) {
+      loggerFormat("Existing user found. Extracting user_id...")
+      const userId = (await existingRow.locator("td").nth(1).innerText()).trim()
+      loggerFormat(`Deleting user with ID: ${userId}`)
+      await page.getByTestId(`delete-user-button-${userId}`).click()
+      await page.waitForSelector('[data-testid="confirm-message-modal"]', { state: "visible" })
+      await page.getByRole("button", { name: "Confirm" }).click()
+      await expect(page.locator(`tr:has-text("${ldapUsername}")`)).toHaveCount(0)
+      loggerFormat("Pre-existing user deleted.")
+    } else {
+      loggerFormat("No existing user found. Continuing test.")
+    }
+
+    await search.fill("")
+    await search.press("Enter").catch(() => {})
+  })
+})
